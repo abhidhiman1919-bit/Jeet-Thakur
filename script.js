@@ -208,16 +208,27 @@ const ART = {
   function renderHome() {
     const q = S.q.trim().toLowerCase();
     const list = P.filter(p => (S.cat === 'All' || p.cat === S.cat) && (!q || (p.name + ' ' + p.cat + ' ' + p.desc).toLowerCase().includes(q)));
-    const hero = !S.q.trim() ? heroHTML() : '';
+    const key = S.cat + '|' + q; if (key !== S.lk) { S.lk = key; S.lim = 24; }
+    const lim = S.lim || 24, hero = !S.q.trim() ? heroHTML() : '';
     const title = S.q.trim() ? `Results for “${esc(S.q.trim())}”` : (S.cat === 'All' ? 'All products' : S.cat);
     main.innerHTML = `
       ${hero}<div class="wrap" id="collection">
         <nav class="chips" aria-label="Categories">${CATS.map(c => `<button class="chip" data-act="cat" data-cat="${c}" aria-pressed="${c === S.cat}">${c}</button>`).join('')}</nav>
         <div class="head"><h2>${title}</h2><span>${list.length} ${list.length === 1 ? 'product' : 'products'}</span></div>
-        ${list.length ? `<div class="grid">${list.map(card).join('')}</div>` : `
+        ${list.length ? `<div class="grid" id="hgrid">${list.slice(0, lim).map(card).join('')}</div>${list.length > lim ? '<div id="sent" style="height:1px"></div>' : ''}` : `
           <div class="empty"><h3>Nothing matched your search</h3><p>Try a shorter word like “shirt” or “kurti”, or browse all products.</p><button class="btn" data-act="home">Show all products</button></div>`}
       </div>`;
     initBest();
+    const g = document.getElementById('hgrid'), se = document.getElementById('sent');
+    if (g && se && 'IntersectionObserver' in window) {
+      let shown = lim;
+      const io = new IntersectionObserver(es => {
+        if (!es[0].isIntersecting) return;
+        g.insertAdjacentHTML('beforeend', list.slice(shown, shown + 24).map(card).join('')); shown += 24; S.lim = shown;
+        if (shown >= list.length) { io.disconnect(); se.remove(); } else { io.unobserve(se); io.observe(se); }
+      }, { rootMargin: '900px' });
+      io.observe(se);
+    } else if (g) g.innerHTML = list.map(card).join('');
   }
 
   const polHTML = p => {
@@ -281,8 +292,15 @@ const ART = {
   }
 
   const artSvg = p => `<svg viewBox="0 0 200 200" role="img" aria-label="${esc(p.name)}"><circle class="c" cx="100" cy="106" r="82" opacity=".5"/>${ART[p.art] || ''}</svg>`;
+  const FULL = {};
   const galleryHTML = p => {
-    const list = p.imgs && p.imgs.length ? p.imgs : [p.img, ...[2, 3, 4, 5].map(n => p.img.replace(/(\.\w+)$/, `-${n}$1`))];
+    const ref = p.imgRef;
+    if (ref && FULL[ref] === undefined && window.FAST) {
+      FULL[ref] = 0;
+      FAST.fullImgs(p).then(a => { FULL[ref] = a; if (S.view === 'detail' && S.id === p.id && !(modal && !modal.hidden)) renderDetail(); }).catch(() => { FULL[ref] = undefined; });
+    }
+    const fl = ref && Array.isArray(FULL[ref]) && FULL[ref].length ? FULL[ref] : null;
+    const list = fl || (ref ? [p.img] : p.imgs && p.imgs.length ? p.imgs : [p.img, ...[2, 3, 4, 5].map(n => p.img.replace(/(\.\w+)$/, `-${n}$1`))]);
     return `<div class="gal ph" style="--h:${p.h}">
       <div class="trk" tabindex="0" role="group" aria-label="${esc(p.name)} photos">
         <div class="sl artsl" hidden>${artSvg(p)}</div>
@@ -1107,20 +1125,17 @@ const ART = {
     try {
       await flush();
       const [settings, soldN, ver] = await Promise.all([fbSend('GET', 'settings'), fbSend('GET', 'sold'), fbSend('GET', 'ver')]);
-      let products = cache.products, brand = cache.brand;
-      if (!products || ver !== cache.ver) { products = await fbSend('GET', 'products'); brand = await fbSend('GET', 'brand'); }
-      cache = { products, brand, settings, sold: soldN, ver };
-      try { localStorage.setItem(CK, JSON.stringify(cache)); } catch (e) {}
+      let products = cache.products, brand = cache.brand, pv = cache.pv;
+      if (!products || ver !== pv) { products = await fbSend('GET', 'products'); brand = await fbSend('GET', 'brand'); pv = ver; if (window.FAST) FAST.cset('products', { v: ver, p: products }); }
+      cache = { products, brand, settings, sold: soldN, ver, pv };
+      try { localStorage.setItem(CK, JSON.stringify({ brand, settings, sold: soldN, ver, pv })); } catch (e) {}
       if (applyCloud(cache)) repaint();
       await pullOrders();
     } catch (e) {}
   }
-  applyCloud(cache);
+  const boot = () => { applyCloud(cache); renderAcct(); renderCart(); renderHome(); document.documentElement.lang = S.lang; applyLang(); setTimeout(pull, 50); };
   setInterval(pull, 8000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) pull(); });
-  setTimeout(pull, 50);
-
-  renderAcct(); renderCart(); renderHome();
-  document.documentElement.lang = S.lang; applyLang();
+  (window.FAST ? FAST.cget('products') : Promise.resolve(null)).then(c => { if (c && c.p) { cache.products = c.p; cache.pv = c.v; } }).catch(() => {}).then(boot);
 
 })();
